@@ -225,6 +225,7 @@ static int ecapi_loadSymbolFromElfByAddr(ECElf_Struct* elf, uint64_t addr, char*
 
     uint32_t addrErr;
     uint32_t addrErrMin = 0xFFFFFFFF;
+    const char* tmpSymbol = NULL;
     const char* tarSymbol = NULL;
 
     if (!symbol)
@@ -245,20 +246,21 @@ static int ecapi_loadSymbolFromElfByAddr(ECElf_Struct* elf, uint64_t addr, char*
                 /* 名称有效 && 地址有效 */
                 if (up32[0] < elf->dynstrSize && up32[2] && addr >= up32[2])
                 {
+                    tmpSymbol = ((const char*)elf->dynstr) + up32[0];
                     /* 直接地址范围匹配 */
                     if (up32[4] > 0 && addr < up32[2] + up32[4])
                     {
-                        tarSymbol = ((const char*)elf->dynstr) + up32[0];
+                        tarSymbol = tmpSymbol;
                         break;
                     }
                     /* 找地址相差最小那个 */
                     else
                     {
                         addrErr = addr - up32[2];
-                        if (addrErr < addrErrMin)
+                        if (addrErr <= addrErrMin && *tmpSymbol)
                         {
                             addrErrMin = addrErr;
-                            tarSymbol = ((const char*)elf->dynstr) + up32[0];
+                            tarSymbol = tmpSymbol;
                         }
                     }
                 }
@@ -273,20 +275,21 @@ static int ecapi_loadSymbolFromElfByAddr(ECElf_Struct* elf, uint64_t addr, char*
                 /* 名称有效 && 地址有效 */
                 if (up32[0] < elf->strtabSize  && up32[2] && addr >= up32[2])
                 {
+                    tmpSymbol = ((const char*)elf->strtab) + up32[0];
                     /* 直接地址范围匹配 */
                     if (up32[4] > 0 && addr < up32[2] + up32[4])
                     {
-                        tarSymbol = ((const char*)elf->strtab) + up32[0];
+                        tarSymbol = tmpSymbol;
                         break;
                     }
                     /* 找地址相差最小那个 */
                     else
                     {
                         addrErr = addr - up32[2];
-                        if (addrErr < addrErrMin)
+                        if (addrErr <= addrErrMin && *tmpSymbol)
                         {
                             addrErrMin = addrErr;
-                            tarSymbol = ((const char*)elf->strtab) + up32[0];
+                            tarSymbol = tmpSymbol;
                         }
                     }
                 }
