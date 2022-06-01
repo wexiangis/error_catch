@@ -39,8 +39,236 @@ typedef struct {
     void* dynstr;
 } ECElf_Struct;
 
+static void ecelf_release(ECElf_Struct* elf);
+static int ecelf_load(const char* file, ECElf_Struct* elf);
+static int ecapi_loadSymbolFromElfByAddr(ECElf_Struct* elf, uint64_t addr, char* symbol, int symbolLen);
+static int ecapi_parse_proc_self_maps(uint64_t* addrList, char** positionList, int positionLen);
+
 static ECAPI_CALLBACK g_ecapi_callback = NULL;
 static void* g_ecapi_priv = NULL;
+
+static void ecapi_signal(int sig)
+{
+    int i, ret;
+    void* pointList[ECAPI_BACKTRACE_DEEP] = {0};
+    uint64_t addrList[ECAPI_BACKTRACE_DEEP] = {0};
+    char positionInfo[ECAPI_BACKTRACE_DEEP * ECAPI_POSITION_LEN] = {0};
+    char* positionList[ECAPI_BACKTRACE_DEEP] = {0};
+
+    /* 回溯调用过的函数地址 */
+    ret = backtrace(pointList, ECAPI_BACKTRACE_DEEP);
+    if (ret > 0)
+    {
+        /* 函数地址转换为uint64_t */
+        for (i = 0; i < ret; i++)
+        {
+            addrList[i] = (uint64_t)pointList[i];
+            // printf("%dth %08llX \r\n", i, (long long unsigned int)addrList[i]);
+        }
+        /* 指针定点 */
+        for (i = 0; i < ECAPI_BACKTRACE_DEEP; i++)
+        {
+            positionList[i] = &positionInfo[i * ECAPI_POSITION_LEN];
+        }
+
+        /* 减去系统内存地址偏移量,得到函数在elf文件中的实际地址(不是物理地址) */
+        if (ecapi_parse_proc_self_maps(addrList, positionList, ECAPI_POSITION_LEN) != 0)
+        {
+            perror("ecapi_parse_proc_self_maps failed \r\n");
+            ret = 0;
+        }
+    }
+    else
+        perror("backtrace failed \r\n");
+
+#if 0
+    char **strings = backtrace_symbols(pointList, ret);
+    printf("backtrace_symbols/%p \r\n", strings);
+    if (strings) {
+        for (i = 0; i < ret; i++)
+            printf("%dth: %s \n", i, strings[i]);
+        free(strings);
+    }
+#endif
+
+    if (g_ecapi_callback)
+        g_ecapi_callback(sig, (char**)positionList, ret, g_ecapi_priv);
+}
+
+static int ecapi_parse_proc_self_maps(uint64_t* addrList, char** positionList, int positionLen)
+{
+    int i, ret;
+
+    FILE* fp;
+    char line[1024] = {0};
+    uint64_t addrBegin = 0;
+    uint64_t addrEnd = 0;
+    uint64_t addrSize = 0;
+    char temp[1024];
+    char file[1024] = {0};
+
+    int hitCount = 0;
+    char hitArray[ECAPI_BACKTRACE_DEEP] = {0};
+    ECElf_Struct elf = {0};
+
+    fp = fopen((const char*)"/proc/self/maps", "r");
+    if (!fp)
+        return -1;
+
+    while (fgets(line, sizeof(line), fp))
+    {
+        /* elf文件在系统内存中分成多块进行映射 */
+        sscanf(line, "%llx-%llx %s %llx %s %s %s",
+            (long long unsigned int*)&addrBegin,
+            (long long unsigned int*)&addrEnd,
+            temp, /* premission */
+            (long long unsigned int*)&addrSize,
+            temp, /* time */
+            temp, /* unknown */
+            temp); /* file */
+
+        // printf("%s // %08llX - %08llX - %08llX \r\n", line, addrBegin, addrEnd, addrSize);
+
+        /* 比较地址范围,找到对应的addrBegin,减去该值再加上块大小即是目标地址 */
+        for (i = 0; i < ECAPI_BACKTRACE_DEEP; i++)
+        {
+            /* already hit */
+            if (hitArray[i])
+                continue;
+            
+            /* within addrBegin ~ addrEnd ? */
+            if (addrList[i] >= addrBegin && addrList[i] < addrEnd)
+            {
+                /* get the addr of file */
+                addrList[i] = addrList[i] - addrBegin + addrSize;
+
+                /* flag set */
+                hitArray[i] = 1;
+                hitCount += 1;
+
+                /* need to parse a new elf ? */
+                if (strcmp(temp, file))
+                {
+                    strcpy(file, temp);
+                    if (ecelf_load(file, &elf))
+                        continue;
+                }
+
+                ret = ecapi_loadSymbolFromElfByAddr(&elf, addrList[i], positionList[i], positionLen);
+
+                /* add file name to the tail */
+                snprintf(positionList[i] + ret, positionLen - ret, " - %s", file);
+            }
+        }
+
+        /* 匹配完成,提前跑路 */
+        if (hitCount == ECAPI_BACKTRACE_DEEP)
+            break;
+    }
+
+    fclose(fp);
+    ecelf_release(&elf);
+    return hitCount > 0 ? 0 : (-1);
+}
+
+static int ecapi_loadSymbolFromElfByAddr(ECElf_Struct* elf, uint64_t addr, char* symbol, int symbolLen)
+{
+    uint32_t i;
+    uint32_t* up32;
+
+    uint32_t addrErr;
+    uint32_t addrErrMin = 0xFFFFFFFF;
+    const char* tarSymbol = NULL;
+
+    if (!symbol)
+        return -1;
+
+    /* 32bit or 64bit system ? */
+    if (sizeof(void*) == 4)
+    {
+        ;
+    }
+    else
+    {
+        /* check .symtab */
+        if (elf->symtab && elf->strtab)
+        {
+            for (i = 0, up32 = (uint32_t*)elf->symtab; i < elf->symtabSize; i += sizeof(Elf64_Sym))
+            {
+                /* 名称有效 && 地址有效 */
+                if (up32[0] < elf->strtabSize && up32[2])
+                {
+                    /* 找地址相差最小那个 */
+                    if (addr >= up32[2] && addr < up32[2] + up32[4])
+                    {
+                        tarSymbol = ((const char*)elf->strtab) + up32[0];
+                        break;
+                    }
+                    /* 找地址相差最小那个 */
+                    else
+                    {
+                        addrErr = addr - up32[2];
+                        if (addrErr < addrErrMin)
+                        {
+                            addrErrMin = addrErr;
+                            tarSymbol = ((const char*)elf->strtab) + up32[0];
+                        }
+                    }
+                }
+                up32 += sizeof(Elf64_Sym) / 4;
+            }
+        }
+        /* check .dynsym */
+        if (elf->dynsym && elf->dynstr)
+        {
+            for (i = 0, up32 = (uint32_t*)elf->dynsym; i < elf->dynsymSize; i += sizeof(Elf64_Sym))
+            {
+                /* 名称有效 && 地址有效 */
+                if (up32[0] < elf->dynstrSize && up32[2])
+                {
+                    /* 直接地址范围匹配 */
+                    if (addr >= up32[2] && addr < up32[2] + up32[4])
+                    {
+                        tarSymbol = ((const char*)elf->dynstr) + up32[0];
+                        break;
+                    }
+                    /* 找地址相差最小那个 */
+                    else
+                    {
+                        addrErr = addr - up32[2];
+                        if (addrErr < addrErrMin)
+                        {
+                            addrErrMin = addrErr;
+                            tarSymbol = ((const char*)elf->dynstr) + up32[0];
+                        }
+                    }
+                }
+                up32 += sizeof(Elf64_Sym) / 4;
+            }
+        }
+    }
+
+    if (tarSymbol)
+        return snprintf(symbol, symbolLen, "%08llX - %s", (long long unsigned int)addr, tarSymbol);
+    else
+        return snprintf(symbol, symbolLen, "%08llX", (long long unsigned int)addr);
+}
+
+void ecapi_register(ECAPI_CALLBACK callback, void* priv, int sig, ...)
+{
+    va_list ap;
+
+    g_ecapi_callback = callback;
+    g_ecapi_priv = priv;
+
+    va_start(ap, sig);
+    while (sig)
+    {
+        signal(sig, ecapi_signal);
+        sig = va_arg(ap, int);
+    }
+    va_end(ap);
+}
 
 static void ecelf_release(ECElf_Struct* elf)
 {
@@ -251,218 +479,4 @@ static int ecelf_load(const char* file, ECElf_Struct* elf)
 
     fclose(fp);
     return ret;
-}
-
-static int ecapi_loadSymbolFromElfByAddr(ECElf_Struct* elf, uint64_t addr, char* symbol, int symbolLen)
-{
-    uint32_t i;
-    uint32_t* up32;
-
-    uint32_t addrErr;
-    uint32_t addrErrMin = 0xFFFFFFFF;
-    const char* tarSymbol = NULL;
-
-    if (!symbol)
-        return -1;
-
-    /* 32bit or 64bit system ? */
-    if (sizeof(void*) == 4)
-    {
-        ;
-    }
-    else
-    {
-        /* check .dynsym */
-        if (elf->dynsym && elf->dynstr)
-        {
-            for (i = 0, up32 = (uint32_t*)elf->dynsym; i < elf->dynsymSize; i += sizeof(Elf64_Sym))
-            {
-                /* 名称有效 && 地址有效 */
-                if (up32[0] < elf->dynstrSize && up32[2])
-                {
-                    /* 直接地址范围匹配 */
-                    if (addr >= up32[2] && addr < up32[2] + up32[4])
-                    {
-                        tarSymbol = ((const char*)elf->dynstr) + up32[0];
-                        break;
-                    }
-                    /* 找地址相差最小那个 */
-                    else
-                    {
-                        addrErr = addr - up32[2];
-                        if (addrErr < addrErrMin)
-                        {
-                            addrErrMin = addrErr;
-                            tarSymbol = ((const char*)elf->dynstr) + up32[0];
-                        }
-                    }
-                }
-                up32 += sizeof(Elf64_Sym) / 4;
-            }
-        }
-        /* check .symtab */
-        if (elf->symtab && elf->strtab)
-        {
-            for (i = 0, up32 = (uint32_t*)elf->symtab; i < elf->symtabSize; i += sizeof(Elf64_Sym))
-            {
-                /* 名称有效 && 地址有效 */
-                if (up32[0] < elf->strtabSize && up32[2])
-                {
-                    /* 找地址相差最小那个 */
-                    if (addr >= up32[2] && addr < up32[2] + up32[4])
-                    {
-                        tarSymbol = ((const char*)elf->strtab) + up32[0];
-                        break;
-                    }
-                    /* 找地址相差最小那个 */
-                    else
-                    {
-                        addrErr = addr - up32[2];
-                        if (addrErr < addrErrMin)
-                        {
-                            addrErrMin = addrErr;
-                            tarSymbol = ((const char*)elf->strtab) + up32[0];
-                        }
-                    }
-                }
-                up32 += sizeof(Elf64_Sym) / 4;
-            }
-        }
-    }
-
-    if (tarSymbol)
-        return snprintf(symbol, symbolLen, "%08llX - %s", (long long unsigned int)addr, tarSymbol);
-    else
-        return snprintf(symbol, symbolLen, "%08llX", (long long unsigned int)addr);
-}
-
-static int ecapi_parse_proc_self_maps(uint64_t* addrList, char** positionList, int positionLen)
-{
-    int i, ret;
-
-    FILE* fp;
-    char line[1024] = {0};
-    uint64_t addrBegin = 0;
-    uint64_t addrEnd = 0;
-    uint64_t addrSize = 0;
-    char temp[1024];
-    char file[1024] = {0};
-
-    int hitCount = 0;
-    char hitArray[ECAPI_BACKTRACE_DEEP] = {0};
-    ECElf_Struct elf = {0};
-
-    fp = fopen((const char*)"/proc/self/maps", "r");
-    if (!fp)
-        return -1;
-
-    while (fgets(line, sizeof(line), fp))
-    {
-        /* elf文件在系统内存中分成多块进行映射 */
-        sscanf(line, "%llx-%llx %s %llx %s %s %s",
-            (long long unsigned int*)&addrBegin,
-            (long long unsigned int*)&addrEnd,
-            temp, /* premission */
-            (long long unsigned int*)&addrSize,
-            temp, /* time */
-            temp, /* unknown */
-            temp); /* file */
-
-        /* 比较地址范围,找到对应的addrBegin,减去该值再加上块大小即是目标地址 */
-        for (i = 0; i < ECAPI_BACKTRACE_DEEP; i++)
-        {
-            /* already hit */
-            if (hitArray[i])
-                continue;
-            
-            /* within addrBegin ~ addrEnd ? */
-            if (addrList[i] >= addrBegin && addrList[i] < addrEnd)
-            {
-                /* get the addr of file */
-                addrList[i] = addrList[i] - addrBegin + addrSize;
-
-                /* flag set */
-                hitArray[i] = 1;
-                hitCount += 1;
-
-                /* need to parse a new elf ? */
-                if (strcmp(temp, file))
-                {
-                    strcpy(file, temp);
-                    if (ecelf_load(file, &elf))
-                        continue;
-                }
-
-                ret = ecapi_loadSymbolFromElfByAddr(&elf, addrList[i], positionList[i], positionLen);
-
-                /* add file name to the tail */
-                snprintf(positionList[i] + ret, positionLen - ret, " - %s", file);
-            }
-        }
-
-        /* 匹配完成,提前跑路 */
-        if (hitCount == ECAPI_BACKTRACE_DEEP)
-            break;
-    }
-
-    fclose(fp);
-    ecelf_release(&elf);
-    return hitCount > 0 ? 0 : (-1);
-}
-
-static void ecapi_signal(int sig)
-{
-    int i, ret;
-    void* pointList[ECAPI_BACKTRACE_DEEP] = {0};
-    uint64_t addrList[ECAPI_BACKTRACE_DEEP] = {0};
-    char positionInfo[ECAPI_BACKTRACE_DEEP * ECAPI_POSITION_LEN] = {0};
-    char* positionList[ECAPI_BACKTRACE_DEEP] = {0};
-
-    /* 回溯调用过的函数地址 */
-    ret = backtrace(pointList, ECAPI_BACKTRACE_DEEP);
-    if (ret > 0)
-    {
-        /* 函数地址转换为uint64_t */
-        for (i = 0; i < ret; i++)
-            addrList[i] = (uint64_t)pointList[i];
-        /* 指针定点 */
-        for (i = 0; i < ECAPI_BACKTRACE_DEEP; i++)
-            positionList[i] = &positionInfo[i * ECAPI_POSITION_LEN];
-
-        /* 减去系统内存地址偏移量,得到函数在elf文件中的实际地址(不是物理地址) */
-        if (ecapi_parse_proc_self_maps(addrList, positionList, ECAPI_POSITION_LEN) != 0)
-        {
-            perror("ecapi_parse_proc_self_maps failed \r\n");
-            ret = 0;
-        }
-    }
-    else
-        perror("backtrace failed \r\n");
-
-    // char **strings = backtrace_symbols(pointList, ret);
-    // printf("backtrace_symbols/%p \r\n", strings);
-    // if (strings) {
-    //     for (i = 0; i < ret; i++)
-    //         printf("%dth: %s \n", i, strings[i]);
-    //     free(strings);
-    // }
-
-    if (g_ecapi_callback)
-        g_ecapi_callback(sig, (char**)positionList, ret, g_ecapi_priv);
-}
-
-void ecapi_register(ECAPI_CALLBACK callback, void* priv, int sig, ...)
-{
-    va_list ap;
-
-    g_ecapi_callback = callback;
-    g_ecapi_priv = priv;
-
-    va_start(ap, sig);
-    while (sig)
-    {
-        signal(sig, ecapi_signal);
-        sig = va_arg(ap, int);
-    }
-    va_end(ap);
 }

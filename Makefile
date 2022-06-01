@@ -1,10 +1,10 @@
 
 CFLAGS += -Wall
 # CFLAGS += -rdynamic
-# CFLAGS += -fsanitize=address
+# CFLAGS += -L./ -lext -DLIBEXT
 
 target: lib
-	@gcc -o out main.c ecapi.c -L./ -lext $(CFLAGS)
+	@gcc -o out main.c ecapi.c $(CFLAGS)
 
 lib:
 	@gcc -shared -fPIC -o libext.so libext.c $(CFLAGS)

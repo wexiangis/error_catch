@@ -4,7 +4,9 @@
 #include <string.h>
 
 #include "ecapi.h"
+#ifdef LIBEXT
 #include "libext.h"
+#endif
 
 int signal_6_abrt(int len)
 {
