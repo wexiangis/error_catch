@@ -18,18 +18,21 @@
 $user@ubuntu: make && ./out
 free(): double free detected in tcache 2
 === Crash by signal 6, backtrace function 11: ===
-  00th: 00002298 ecapi_signal /disk/pro/github/error_catch/out 
-  01th: 000430C0 killpg /usr/lib/x86_64-linux-gnu/libc-2.31.so 
-  02th: 0004303B gsignal /usr/lib/x86_64-linux-gnu/libc-2.31.so 
-  03th: 00022859 _end /usr/lib/x86_64-linux-gnu/libc-2.31.so 
-  04th: 0008D29E __fsetlocking /usr/lib/x86_64-linux-gnu/libc-2.31.so 
-  05th: 0009532C pthread_attr_setschedparam /usr/lib/x86_64-linux-gnu/libc-2.31.so 
-  06th: 00096F9D pthread_attr_setschedparam /usr/lib/x86_64-linux-gnu/libc-2.31.so 
-  07th: 000013D3 signal_6_abrt /disk/pro/github/error_catch/out 
-  08th: 000014EA main /disk/pro/github/error_catch/out 
-  09th: 000240B3 __libc_start_main /usr/lib/x86_64-linux-gnu/libc-2.31.so 
-  10th: 000012CE _start /disk/pro/github/error_catch/out 
+  00th: 00002298 - ecapi_signal - /disk/pro/github/error_catch/out 
+  01th: 000430C0 - killpg - /usr/lib/x86_64-linux-gnu/libc-2.31.so 
+  02th: 0004303B - gsignal - /usr/lib/x86_64-linux-gnu/libc-2.31.so 
+  03th: 00022859 - _end - /usr/lib/x86_64-linux-gnu/libc-2.31.so 
+  04th: 0008D29E - __fsetlocking - /usr/lib/x86_64-linux-gnu/libc-2.31.so 
+  05th: 0009532C - pthread_attr_setschedparam - /usr/lib/x86_64-linux-gnu/libc-2.31.so 
+  06th: 00096F9D - pthread_attr_setschedparam - /usr/lib/x86_64-linux-gnu/libc-2.31.so 
+  07th: 000013D3 - signal_6_abrt - /disk/pro/github/error_catch/out 
+  08th: 000014EA - main - /disk/pro/github/error_catch/out 
+  09th: 000240B3 - __libc_start_main - /usr/lib/x86_64-linux-gnu/libc-2.31.so 
+  10th: 000012CE - _start - /disk/pro/github/error_catch/out
 ```
-* 上图打印为最后调用的函数列表信息
+* 上图打印为最后跳转地址、对应函数名、对应源文件的列表信息
 * 函数调用顺序从下往上
-* 虽然 ecapi_signal 是最后一个函数,但实际崩溃位置在 signal_6_abrt 对应源程序文件 out
+* 虽然 ecapi_signal() 是最后一个函数, 但实际崩溃位置在 signal_6_abrt()
+* 程序出现异常后, 系统组织错误信号, 并通过 killpg 函数发送到当前进程
+* 进程收到信号后, 按实现注册, 回调到 ecapi_signal() 函数
+* ecapi_signal() 函数按前面"原理简介"的流程, 输出完上面的打印信息

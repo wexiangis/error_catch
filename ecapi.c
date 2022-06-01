@@ -331,7 +331,7 @@ static int ecapi_loadSymbolFromElfByAddr(ECElf_Struct* elf, uint64_t addr, char*
     }
 
     if (tarSymbol)
-        return snprintf(symbol, symbolLen, "%08llX %s", (long long unsigned int)addr, tarSymbol);
+        return snprintf(symbol, symbolLen, "%08llX - %s", (long long unsigned int)addr, tarSymbol);
     else
         return snprintf(symbol, symbolLen, "%08llX", (long long unsigned int)addr);
 }
@@ -396,7 +396,7 @@ static int ecapi_parse_proc_self_maps(uint64_t* addrList, char** positionList, i
                 ret = ecapi_loadSymbolFromElfByAddr(&elf, addrList[i], positionList[i], positionLen);
 
                 /* add file name to the tail */
-                snprintf(positionList[i] + ret, positionLen - ret, " %s", file);
+                snprintf(positionList[i] + ret, positionLen - ret, " - %s", file);
             }
         }
 
