@@ -40,7 +40,12 @@ void callback(int signal, char** funs, int size, void* priv)
     for(i = 0; i < size; i ++)
         printf("  %02dth: %s \r\n", i, funs[i]);
 
-    exit(0);
+    /* 测试信号,不退出程序 */
+    if (signal == SIGUSR1 || signal == SIGUSR2)
+        ;
+    /* 异常信号,务必在此退出程序,否则可能死循环 */
+    else
+        exit(0);
 }
 
 int main(void)
@@ -63,6 +68,7 @@ int main(void)
     // signal_8_fpe(0);
     // signal_11_segv(0);
     // libext_test(8);
+    // ecapi_signal_test(SIGUSR1);
 
     return 0;
 }

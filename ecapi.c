@@ -105,6 +105,11 @@ static void ecapi_signal(int sig)
         g_ecapi_callback(sig, (char**)positionList, ret, g_ecapi_priv);
 }
 
+void ecapi_signal_test(int sig)
+{
+    ecapi_signal(sig);
+}
+
 static int ecapi_parse_proc_self_maps(uint64_t* addrList, int addrListLen, char** positionList, int positionLen)
 {
     int i, ret;
