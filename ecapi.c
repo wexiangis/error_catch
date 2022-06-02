@@ -129,7 +129,7 @@ static int ecapi_parse_proc_self_maps(uint64_t* addrList, int addrListLen, char*
     while (fgets(line, sizeof(line), fp))
     {
         /* elf文件在系统内存中分成多块进行映射 */
-        sscanf(line, "%llx-%llx %s %llx %s %s %s",
+        ret = sscanf(line, "%llx-%llx %s %llx %s %s %s",
             (long long unsigned int*)&addrBegin,
             (long long unsigned int*)&addrEnd,
             temp, /* premission */
@@ -140,7 +140,7 @@ static int ecapi_parse_proc_self_maps(uint64_t* addrList, int addrListLen, char*
 
         // printf("%s // %08llX - %08llX - %08llX \r\n", line, addrBegin, addrEnd, addrOffset);
 
-        if (addrEnd > addrBegin && addrOffset == 0)
+        if (ret == 7 && addrEnd > addrBegin && addrOffset == 0)
         {
             if (addrEnd - addrBegin > sizeof(Elf64_Ehdr))
                 memcpy(&ehdr64, (void*)addrBegin, sizeof(Elf64_Ehdr));
@@ -399,11 +399,12 @@ static int ecelf_load(const char* file, ECElf_Struct* elf)
                 ehdr64.e_shstrndx);
 #endif
 
+            /* 简单格式检查 */
+            if (ehdr64.e_shentsize != sizeof(Elf64_Shdr) || !ehdr64.e_shoff || !ehdr64.e_shnum)
+                break;
+
             /* 没有 section header name table 则无法匹配 .strtab 和 .symtab */
             if (ehdr64.e_shstrndx == SHN_XINDEX || ehdr64.e_shstrndx >= ehdr64.e_shnum)
-                break;
-            /* 理论应该一致 */
-            if (ehdr64.e_shentsize != sizeof(Elf64_Shdr))
                 break;
 
             /* 全量读取 section header 内存 */
@@ -566,11 +567,12 @@ static int ecelf_loadByMem(uint8_t* addr, ECElf_Struct* elf)
             /* 读 elf 头,取 section header 偏移量 */
             memcpy(&ehdr64, addr, sizeof(Elf64_Ehdr));
 
+            /* 简单格式检查 */
+            if (ehdr64.e_shentsize != sizeof(Elf64_Shdr) || !ehdr64.e_shoff || !ehdr64.e_shnum)
+                break;
+
             /* 没有 section header name table 则无法匹配 .strtab 和 .symtab */
             if (ehdr64.e_shstrndx == SHN_XINDEX || ehdr64.e_shstrndx >= ehdr64.e_shnum)
-                break;
-            /* 理论应该一致 */
-            if (ehdr64.e_shentsize != sizeof(Elf64_Shdr))
                 break;
 
             /* 全量读取 section header 内存 */
