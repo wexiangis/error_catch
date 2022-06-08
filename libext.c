@@ -1,18 +1,17 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-static int libext_6_signal(int len)
+static int libext_6_doubleFree()
 {
-    char* str = (char*)calloc(len, 1);
-    // printf("%s(): 6 Abnormal termination (double free) \r\n", __FUNCTION__);
+    char* str = (char*)calloc(4, 1);
     str[0] = 'A';
     free(str);
-    if (len)
-        free(str);
-    return len;
+    free(str);
+    return 0;
 }
 
-void libext_test(int i)
+void libext_test()
 {
-    libext_6_signal(i + i);
+    libext_6_doubleFree();
+    printf("call libext_test\r\n");
 }

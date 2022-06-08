@@ -1,7 +1,7 @@
 
 CFLAGS += -Wall
-# CFLAGS += -rdynamic
 # CFLAGS += -L./ -lext -DLIBEXT
+# CFLAGS += -rdynamic
 
 target: lib
 	@gcc -o out main.c ecapi.c $(CFLAGS)

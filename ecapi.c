@@ -322,18 +322,29 @@ static int ecapi_loadSymbolFromElfByAddr(ECElf_Struct* elf, uint64_t addr, char*
 
 void ecapi_register(ECAPI_CALLBACK callback, void* priv, int sig, ...)
 {
+    int i;
     va_list ap;
+    const int defaultSig[7] = {
+        SIGINT, SIGILL, SIGABRT, SIGFPE, SIGSEGV, SIGTERM, SIGKILL};
 
     g_ecapi_callback = callback;
     g_ecapi_priv = priv;
 
-    va_start(ap, sig);
-    while (sig)
+    if (sig == 0)
     {
-        signal(sig, ecapi_signal);
-        sig = va_arg(ap, int);
+        for (i = 0; i < 7; i++)
+            signal(defaultSig[i], ecapi_signal);
     }
-    va_end(ap);
+    else
+    {
+        va_start(ap, sig);
+        while (sig)
+        {
+            signal(sig, ecapi_signal);
+            sig = va_arg(ap, int);
+        }
+        va_end(ap);
+    }
 }
 
 static void ecelf_release(ECElf_Struct* elf)

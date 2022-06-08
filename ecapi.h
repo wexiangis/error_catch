@@ -14,10 +14,17 @@
 typedef void (*ECAPI_CALLBACK)(int signal, char** positionList, int positionNum, void* priv);
 
 /*
+ *  注册崩溃回调和要响应的信号
+ *  参数:
+ *     callback: 崩溃后回调,如果不是测试信号,务必在函数内调用 exit(-1) 结束进程
+ *     priv: 私有传参
+ *     signal: 注册要响应的信号,以0结尾. 若第一个 signal=0 则使用默认配置
+ * 
  *  推荐注册信号:
  *      SIGINT, SIGILL, SIGABRT, SIGFPE, SIGSEGV, SIGTERM, SIGKILL
  *  
  *  示例: (边长参数用0结尾)
+ *      ecapi_register(callback, NULL, 0); // 将自动填充
  *      ecapi_register(callback, NULL, SIGINT, 0);
  *      ecapi_register(callback, NULL, SIGINT, SIGILL, 0);
  *      ecapi_register(callback, NULL, SIGINT, SIGILL, SIGABRT, 0);

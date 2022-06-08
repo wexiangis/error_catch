@@ -8,28 +8,26 @@
 #include "libext.h"
 #endif
 
-int signal_6_abrt(int len)
+int signal_6_doubleFree()
 {
-    char* str = (char*)calloc(len, 1);
-    // printf("%s(): 6 Abnormal termination (double free) \r\n", __FUNCTION__);
+    char* str = (char*)calloc(4, 1);
     str[0] = 'A';
     free(str);
-    if (len)
-        free(str);
-    return len;
+    free(str);
+    return 0;
 }
 
-int signal_8_fpe(int num)
+int signal_8_fpe()
 {
-    // printf("%s(): 8 Erroneous arithmetic operation (floating point exception) \r\n", __FUNCTION__);
+    int num = 0;
     return 128 / num;
 }
 
-int signal_11_segv(int addr)
+int signal_11_segv()
 {
-    // printf("%s(): 11 Invalid access to storage \r\n", __FUNCTION__);
-    memcpy((char*)&addr, "12345678", 8);
-    return addr;
+    int* addr = (int*)10086;
+    *addr = 10010;
+    return 0;
 }
 
 void callback(int signal, char** funs, int size, void* priv)
@@ -51,23 +49,13 @@ void callback(int signal, char** funs, int size, void* priv)
 int main(void)
 {
 	/* 注册信号,使用0结尾 */
-    ecapi_register(
-        callback,
-        NULL,
-        SIGINT,
-        SIGILL,
-        SIGABRT,
-        SIGFPE,
-        SIGSEGV,
-        SIGTERM,
-        SIGKILL,
-        0);
+    ecapi_register(callback,  NULL, 0);
 
 	/* 挑选一种 go die 方式 */
-    signal_6_abrt(8);
-    // signal_8_fpe(0);
-    // signal_11_segv(0);
-    // libext_test(8);
+    signal_6_doubleFree();
+    // signal_8_fpe();
+    // signal_11_segv();
+    // libext_test();
     // ecapi_signal_test(SIGUSR1);
 
     return 0;
