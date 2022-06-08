@@ -225,6 +225,7 @@ static int ecapi_loadSymbolFromElfByAddr(ECElf_Struct* elf, uint64_t addr, char*
 
     uint32_t addrErr;
     uint32_t addrErrMin = 0xFFFFFFFF;
+    uint32_t addrHit = (uint32_t)addr;
     const char* tmpSymbol = NULL;
     const char* tarSymbol = NULL;
 
@@ -250,6 +251,7 @@ static int ecapi_loadSymbolFromElfByAddr(ECElf_Struct* elf, uint64_t addr, char*
                     /* 直接地址范围匹配 */
                     if (up32[4] > 0 && addr < up32[2] + up32[4])
                     {
+                        addrHit = up32[2];
                         tarSymbol = tmpSymbol;
                         break;
                     }
@@ -259,6 +261,7 @@ static int ecapi_loadSymbolFromElfByAddr(ECElf_Struct* elf, uint64_t addr, char*
                         addrErr = addr - up32[2];
                         if (addrErr <= addrErrMin && *tmpSymbol)
                         {
+                            addrHit = up32[2];
                             addrErrMin = addrErr;
                             tarSymbol = tmpSymbol;
                         }
@@ -279,6 +282,7 @@ static int ecapi_loadSymbolFromElfByAddr(ECElf_Struct* elf, uint64_t addr, char*
                     /* 直接地址范围匹配 */
                     if (up32[4] > 0 && addr < up32[2] + up32[4])
                     {
+                        addrHit = up32[2];
                         tarSymbol = tmpSymbol;
                         break;
                     }
@@ -288,6 +292,7 @@ static int ecapi_loadSymbolFromElfByAddr(ECElf_Struct* elf, uint64_t addr, char*
                         addrErr = addr - up32[2];
                         if (addrErr <= addrErrMin && *tmpSymbol)
                         {
+                            addrHit = up32[2];
                             addrErrMin = addrErr;
                             tarSymbol = tmpSymbol;
                         }
@@ -299,9 +304,15 @@ static int ecapi_loadSymbolFromElfByAddr(ECElf_Struct* elf, uint64_t addr, char*
     }
 
     if (tarSymbol)
-        return snprintf(symbol, symbolLen, "%08llX - %s", (long long unsigned int)addr, tarSymbol);
+    {
+        return snprintf(symbol, symbolLen, "%08llX(%08X+%08X) - %s",
+            (long long unsigned int)addr, addrHit, (uint32_t)(addr - addrHit), tarSymbol);
+    }
     else
-        return snprintf(symbol, symbolLen, "%08llX", (long long unsigned int)addr);
+    {
+        return snprintf(symbol, symbolLen, "%08llX(%08X+%08X)",
+            (long long unsigned int)addr, addrHit, (uint32_t)(addr - addrHit));
+    }
 }
 
 void ecapi_register(ECAPI_CALLBACK callback, void* priv, int sig, ...)
