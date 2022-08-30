@@ -14,6 +14,7 @@ int signal_6_doubleFree()
     str[0] = 'A';
     free(str);
     free(str);
+    printf("123");
     return 0;
 }
 
@@ -30,13 +31,10 @@ int signal_11_segv()
     return 0;
 }
 
-void callback(int signal, char** funs, int size, void* priv)
+void callback(int signal, const char* log, void* priv)
 {
-    int i = 0;
-
-    printf("=== Crash by signal %d, backtrace function %d: ===\r\n", signal, size);
-    for(i = 0; i < size; i ++)
-        printf("  %02dth: %s \r\n", i, funs[i]);
+    printf("=== Crash by signal %d(%X) ===\r\n", signal, signal);
+    printf("%s\r\n", log);
 
     /* 测试信号,不退出程序 */
     if (signal == SIGUSR1 || signal == SIGUSR2)

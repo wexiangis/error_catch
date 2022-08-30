@@ -1,4 +1,115 @@
+
 #include <stdio.h>
+#include "ecapi.h"
+
+#define ECAPI_LOG_BUFF_MAX 8192
+
+static ECAPI_CALLBACK g_ecapi_callback = NULL;
+static void* g_ecapi_priv = NULL;
+
+#if defined(WIN) || defined(WIN32) || defined(WINCE) || defined(_MSC_VER)
+/* ---------- Windows begin ---------- */
+#include <Windows.h>
+#include <iostream>
+#include "Dbghelp.h"
+#pragma comment(lib, "Dbghelp.lib" )
+using namespace std;
+
+/* xxx */
+static void dump_callstack(CONTEXT *context, DWORD exceptionCode)
+{
+	DWORD machineType = IMAGE_FILE_MACHINE_I386;
+	HANDLE hProcess = GetCurrentProcess();
+	HANDLE hThread = GetCurrentThread();
+	STACKFRAME sf;
+
+	memset(&sf, 0, sizeof(STACKFRAME));
+	sf.AddrPC.Offset = context->Eip;
+	sf.AddrPC.Mode = AddrModeFlat;
+	sf.AddrStack.Offset = context->Esp;
+	sf.AddrStack.Mode = AddrModeFlat;
+	sf.AddrFrame.Offset = context->Ebp;
+	sf.AddrFrame.Mode = AddrModeFlat;
+
+    int index = 0;
+    int logBuffSize = 0;
+    char logBuff[ECAPI_LOG_BUFF_MAX] = {0};
+
+	/* 定位到下一个函数的堆栈位置 */
+	while (StackWalk(machineType, hProcess, hThread, &sf, context, 0, SymFunctionTableAccess, SymGetModuleBase, 0)
+		&& sf.AddrFrame.Offset != 0)
+	{
+		/* 获取函数名 */
+		BYTE symbolBuffer[sizeof(SYMBOL_INFO)+1024];
+		PSYMBOL_INFO pSymbol = (PSYMBOL_INFO)symbolBuffer;
+		pSymbol->SizeOfStruct = sizeof(symbolBuffer);
+		pSymbol->MaxNameLen = 1024;
+		BOOL ret1 = SymFromAddr(hProcess, sf.AddrPC.Offset, 0, pSymbol);
+		// printlog("\nFunction : %08X - %s \n", sf.AddrPC.Offset, ret ? pSymbol->Name : "None");
+
+		/* 获取文件名和行和号 */
+		IMAGEHLP_LINE lineInfo = { sizeof(IMAGEHLP_LINE) };
+		DWORD dwLineDisplacement;
+		BOOL ret2 = SymGetLineFromAddr(hProcess, sf.AddrPC.Offset, &dwLineDisplacement, &lineInfo);
+		// printlog("    File : %s \n", ret ? lineInfo.FileName : "None");
+		// printlog("    Line : %d \n", ret ? lineInfo.LineNumber : -1);
+
+        /* 组织回调内容 */
+        logBuffSize += _snprintf(&logBuff[logBuffSize], ECAPI_LOG_BUFF_MAX - logBuffSize, "%dth: %08X - %s - %s(%d)\n",
+            index++,
+            sf.AddrPC.Offset,
+            ret1 ? pSymbol->Name : "None",
+            ret2 ? lineInfo.FileName : "None",
+            lineInfo.LineNumber);
+        if (logBuffSize > ECAPI_LOG_BUFF_MAX - 8)
+            break;
+	}
+
+    /* callback */
+    if (logBuffSize > 0)
+    {
+        if (g_ecapi_callback)
+            g_ecapi_callback(exceptionCode, logBuff, g_ecapi_priv);
+    }
+}
+
+LONG WINAPI veh_callback(PEXCEPTION_POINTERS exceptionInfo)
+{
+	/* 初始化 dbghelp.dll */
+	SymInitialize(GetCurrentProcess(), NULL, TRUE);
+	dump_callstack(exceptionInfo->ContextRecord, exceptionInfo->ExceptionRecord->ExceptionCode);
+	/* 关闭 dbghelp.dll */
+	SymCleanup(GetCurrentProcess());
+	return EXCEPTION_EXECUTE_HANDLER;
+}
+
+LONG WINAPI seh_callback(EXCEPTION_POINTERS *exceptionInfo)
+{
+	if (exceptionInfo->ExceptionRecord->ExceptionCode == STATUS_HEAP_CORRUPTION)
+    {
+		/* 统一使用veh回调来整理崩溃信息 */
+		return veh_callback(exceptionInfo);
+	}
+	return EXCEPTION_EXECUTE_HANDLER;
+}
+
+void ecapi_register(ECAPI_CALLBACK callback, void* priv, int signal, ...)
+{
+    g_ecapi_callback = callback;
+    g_ecapi_priv = priv;
+
+	AddVectoredExceptionHandler(1, veh_callback);
+	SetUnhandledExceptionFilter(seh_callback);
+}
+
+void ecapi_signal_test(int sig)
+{
+    veh_callback((PEXCEPTION_POINTERS)sig);
+}
+
+/* ---------- Windows end ---------- */
+#else
+/* ---------- Linux begin ---------- */
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -11,10 +122,6 @@
 
 #include <elf.h>
 #include <execinfo.h>
-
-// #include <stdarg.h>
-// #include <signal.h>
-#include "ecapi.h"
 
 /* How functions to go back ? */
 #define ECAPI_BACKTRACE_DEEP 16
@@ -39,9 +146,6 @@ typedef struct {
     void* dynstr;
 } ECElf_Struct;
 
-static ECAPI_CALLBACK g_ecapi_callback = NULL;
-static void* g_ecapi_priv = NULL;
-
 static void ecelf_release(ECElf_Struct* elf);
 static int ecelf_load(const char* file, ECElf_Struct* elf);
 static int ecelf_loadByMem(uint8_t* addr, ECElf_Struct* elf);
@@ -58,24 +162,24 @@ static int _isSameLevel(uint64_t v1, uint64_t v2)
 
 static void ecapi_signal(int sig)
 {
-    int i, ret;
+    int i, count;
     void* pointList[ECAPI_BACKTRACE_DEEP] = {0};
     uint64_t addrList[ECAPI_BACKTRACE_DEEP] = {0};
     char positionInfo[ECAPI_BACKTRACE_DEEP * ECAPI_POSITION_LEN] = {0};
     char* positionList[ECAPI_BACKTRACE_DEEP] = {0};
 
     /* 回溯调用过的函数地址 */
-    ret = backtrace(pointList, ECAPI_BACKTRACE_DEEP);
-    if (ret > 0)
+    count = backtrace(pointList, ECAPI_BACKTRACE_DEEP);
+    if (count > 0)
     {
         /* 函数地址转换为uint64_t */
-        for (i = 0; i < ret; i++)
+        for (i = 0; i < count; i++)
         {
             addrList[i] = (uint64_t)pointList[i];
             // printf("%dth %08llX \r\n", i, (long long unsigned int)addrList[i]);
         }
-        /* 指针定点 */
-        for (i = 0; i < ret; i++)
+        /* 指针数组分段指向大内存 */
+        for (i = 0; i < count; i++)
         {
             positionList[i] = &positionInfo[i * ECAPI_POSITION_LEN];
             snprintf(positionList[i], ECAPI_POSITION_LEN,
@@ -83,26 +187,36 @@ static void ecapi_signal(int sig)
         }
 
         /* 减去系统内存地址偏移量,得到函数在elf文件中的实际地址(不是物理地址) */
-        if (ecapi_parse_proc_self_maps(addrList, ret, positionList, ECAPI_POSITION_LEN) != 0)
+        if (ecapi_parse_proc_self_maps(addrList, count, positionList, ECAPI_POSITION_LEN) != 0)
         {
             fprintf(stderr, "ecapi_parse_proc_self_maps failed \r\n");
-            ret = 0;
+            count = 0;
         }
     }
     else
         fprintf(stderr, "backtrace failed \r\n");
 
 #if 0
-    char **strings = backtrace_symbols(pointList, ret);
+    char **strings = backtrace_symbols(pointList, count);
     if (strings) {
-        for (i = 0; i < ret; i++)
+        for (i = 0; i < count; i++)
             printf("%dth: %s \n", i, strings[i]);
         free(strings);
     }
 #endif
 
     if (g_ecapi_callback)
-        g_ecapi_callback(sig, (char**)positionList, ret, g_ecapi_priv);
+    {
+        int index = 0;
+        int logBuffSize = 0;
+        char logBuff[ECAPI_LOG_BUFF_MAX] = {0};
+        for (; index < count && logBuffSize < ECAPI_LOG_BUFF_MAX - 8; index++)
+        {
+            logBuffSize += snprintf(&logBuff[logBuffSize], ECAPI_LOG_BUFF_MAX - logBuffSize, "%dth: %s\r\n", index, positionList[index]);
+        }
+
+        g_ecapi_callback(sig, logBuff, g_ecapi_priv);
+    }
 }
 
 void ecapi_signal_test(int sig)
@@ -658,3 +772,6 @@ static int ecelf_loadByMem(uint8_t* addr, ECElf_Struct* elf)
 
     return ret;
 }
+
+/* ---------- Linux end ---------- */
+#endif

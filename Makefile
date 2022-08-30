@@ -1,13 +1,15 @@
+GCC = gcc
 
 CFLAGS += -Wall
 # CFLAGS += -L./ -lext -DLIBEXT
 # CFLAGS += -rdynamic
+# CFLAGS += -g
 
 target: lib
-	@gcc -o out main.c ecapi.c $(CFLAGS)
+	@$(GCC) -o out main.cpp ecapi.cpp $(CFLAGS)
 
 lib:
-	@gcc -shared -fPIC -o libext.so libext.c $(CFLAGS)
+	@$(GCC) -shared -fPIC -o libext.so libext.c $(CFLAGS)
 
 clean:
 	@rm -rf out* *.so

@@ -2,16 +2,18 @@
 #define _EC_API_H_
 
 #include <stdarg.h>
+#if defined(WIN) || defined(WIN32) || defined(WINCE) || defined(_MSC_VER)
+#else
 #include <signal.h>
+#endif
 
 /*
  *  崩溃前回调
  *  param:
  *      signal: 崩溃信号
- *      positionList: 最后调用的函数列表
- *      positionNum: 列表长度
+ *      log: 日志信息
  */
-typedef void (*ECAPI_CALLBACK)(int signal, char** positionList, int positionNum, void* priv);
+typedef void (*ECAPI_CALLBACK)(int signal, const char* log, void* priv);
 
 /*
  *  注册崩溃回调和要响应的信号
